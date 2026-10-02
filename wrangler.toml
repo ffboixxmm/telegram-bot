@@ -2,6 +2,7 @@
 name = "telegram-bot"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
+compatibility_flags = ["allow_custom_ports"]
 workers_dev = true
 
 [[kv_namespaces]]
