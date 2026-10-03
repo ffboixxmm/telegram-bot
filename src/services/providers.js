@@ -139,12 +139,31 @@ export async function savePanel(env, body, existing = {}) {
     Object.hasOwn(PROVIDERS, body.type || existing.type),
     "unsupported_panel_type",
   );
+  const panelType = body.type || existing.type;
+  let resolvedUrl = str(body.url, 1000).replace(/\/$/, "");
+  // Keep an explicitly supplied HTTPS port (e.g. :8000, :8443) intact.
+  // URL parsing/validation below accepts non-default HTTPS ports; never force :443.
+  if (resolvedUrl) {
+    try {
+      const u = new URL(resolvedUrl);
+      resolvedUrl = u.origin + u.pathname.replace(/\/$/, "");
+    } catch {}
+  }
+  if (panelType === "pasarguard" && !resolvedUrl) {
+    resolvedUrl = str(env.PASARGUARD_URL, 1000).replace(/\/$/, "");
+    if (!resolvedUrl) {
+      const existingPasar = (await list(env, "panel")).find(
+        (x) => x.type === "pasarguard" && x.url,
+      );
+      resolvedUrl = existingPasar?.url || "";
+    }
+  }
   const p = {
     ...existing,
     id: existing.id || id(),
     title: str(body.title, 100),
-    type: body.type || existing.type,
-    url: str(body.url, 1000).replace(/\/$/, ""),
+    type: panelType,
+    url: resolvedUrl,
     location: str(body.location, 64),
     country: str(body.country, 2).toUpperCase(),
     enabled: body.enabled !== false,
@@ -161,6 +180,13 @@ export async function savePanel(env, body, existing = {}) {
   };
   assert(p.title, "panel_title_required");
   assert(p.type === "stock" || publicHTTPS(p.url), "panel_https_required");
+  if (p.type === "pasarguard") {
+    assert(p.url, "pasarguard_url_required");
+    const pgSecret = await unseal(env, p.credentials);
+    assert(pgSecret.username, "pasarguard_username_required");
+    assert(pgSecret.password, "pasarguard_password_required");
+    assert(pgSecret.token, "pasarguard_api_key_required");
+  }
   validateModernOptions(p.type, p.options);
   assert(JSON.stringify(p.options).length < 15000, "panel_options_too_large");
   assert(!p.fallbackPanelId || p.fallbackPanelId !== p.id, "fallback_cycle");
@@ -335,11 +361,14 @@ class Connector {
     if (
       this.type === "marzban" ||
       this.type === "marzban_v1" ||
-      this.type === "marzneshin" ||
-      this.type === "pasarguard"
+      this.type === "marzneshin"
     )
       return this.secret.token
         ? { authorization: "Bearer " + this.secret.token }
+        : this.login();
+    if (this.type === "pasarguard")
+      return this.secret.token
+        ? { "X-Api-Key": this.secret.token }
         : this.login();
     if (
       this.type === "xui" ||
@@ -395,6 +424,14 @@ class Connector {
     });
   }
   async call(path, method = "GET", body, allow404 = false) {
+    if (this.type === "pasarguard" && this.secret.token && this.secret.username && this.secret.password) {
+      const apiKeyResponse = await this.request(path, method, body, { "X-Api-Key": this.secret.token });
+      if (apiKeyResponse.status === 401 || apiKeyResponse.status === 403) {
+        await this.login(true);
+        return expectResponse(await this.request(path, method, body), allow404);
+      }
+      return expectResponse(apiKeyResponse, allow404);
+    }
     return expectResponse(await this.request(path, method, body), allow404);
   }
   get root() {
@@ -446,10 +483,70 @@ class Connector {
     if (this.type === "stock") return { ok: true, kind: "local_inventory" };
     const start = Date.now();
     let data;
-    if (
+    if (this.type === "pasarguard") {
+      // Diagnose API-key and username/password authentication independently.
+      // This prevents a bad API key from being hidden by the password fallback.
+      const keyRes = await this.request(
+        "/api/admin",
+        "GET",
+        undefined,
+        { "X-Api-Key": this.secret.token || "" },
+        true,
+      );
+      if (keyRes.ok) {
+        return {
+          ok: true,
+          ms: Date.now() - start,
+          at: Date.now(),
+          auth: "api_key",
+          apiKey: "valid",
+          passwordAuth: "not_tested",
+          data: keyRes.data,
+        };
+      }
+      const keyStatus = keyRes.status;
+      let passwordAuth = "not_tested";
+      if (this.secret.username && this.secret.password) {
+        try {
+          const body = new URLSearchParams({
+            username: this.secret.username,
+            password: this.secret.password,
+          });
+          const loginRes = await this.request(
+            "/api/admin/token",
+            "POST",
+            body,
+            {},
+            true,
+          );
+          if (loginRes.ok && loginRes.data?.access_token) passwordAuth = "valid";
+          else if (loginRes.status === 401 || loginRes.status === 403) passwordAuth = "invalid";
+          else passwordAuth = `http_${loginRes.status}`;
+        } catch (e) {
+          passwordAuth = String(e?.message || "provider_network_error");
+        }
+      }
+      if (keyStatus === 401 || keyStatus === 403) {
+        if (passwordAuth === "valid") {
+          return {
+            ok: true,
+            warning: "provider_api_key_invalid",
+            ms: Date.now() - start,
+            at: Date.now(),
+            auth: "username_password",
+            apiKey: "invalid",
+            passwordAuth,
+          };
+        }
+        throw new RemoteError(
+          passwordAuth === "invalid" ? "provider_credentials_invalid" : "provider_auth_failed",
+          { remoteStatus: keyStatus },
+        );
+      }
+      throw new RemoteError(`provider_http_${keyStatus}`, { remoteStatus: keyStatus });
+    } else if (
       this.type === "marzban" ||
-      this.type === "marzban_v1" ||
-      this.type === "pasarguard"
+      this.type === "marzban_v1"
     )
       data = await this.call("/api/system");
     else if (this.type === "marzneshin")
@@ -480,9 +577,37 @@ class Connector {
     assert(/^[0-9]+$/.test(String(nodeId)), "invalid_node_id");
     return this.call("/api/node/" + nodeId + "/reconnect", "POST", {});
   }
+  pasarguardUserPath(account, legacy = false) {
+    if (this.type !== "pasarguard") return null;
+    if (!legacy && account?.remoteId != null && String(account.remoteId).trim())
+      return "/api/user/by-id/" + encodeURIComponent(String(account.remoteId));
+    return "/api/user/" + encodeURIComponent(account?.username || "");
+  }
+  async pasarguardId(account) {
+    assert(this.type === "pasarguard", "provider_type_mismatch");
+    if (account?.remoteId != null && String(account.remoteId).trim())
+      return String(account.remoteId);
+    const remote = await this.get(account);
+    assert(remote?.remoteId != null && String(remote.remoteId).trim(), "remote_user_id_missing", 502);
+    account.remoteId = String(remote.remoteId);
+    return account.remoteId;
+  }
   async get(account) {
     if (this.modern) return this.modern.get(account);
     const username = encodeURIComponent(account.username);
+    if (this.type === "pasarguard") {
+      // v5 uses ID-based endpoints. Keep username lookup only as a migration
+      // fallback for services created by older bot versions.
+      const primary = account?.remoteId != null && String(account.remoteId).trim()
+        ? this.pasarguardUserPath(account)
+        : null;
+      if (primary) {
+        const raw = await this.call(primary, "GET", undefined, true);
+        return raw ? normalize(raw) : null;
+      }
+      const raw = await this.call(this.pasarguardUserPath(account, true), "GET", undefined, true);
+      return raw ? normalize(raw) : null;
+    }
     if (isMarzLike(this.type)) {
       const raw = await this.call(
         (this.type === "marzneshin" ? "/api/users/" : "/api/user/") + username,
@@ -1075,6 +1200,16 @@ class Connector {
   async update(a, desired) {
     this.supported("renew");
     if (this.modern) return this.modern.update(a, desired);
+    if (this.type === "pasarguard") {
+      const body = {
+        data_limit: desired.dataLimit,
+        expire: desired.expiresAt
+          ? new Date(desired.expiresAt * 1000).toISOString()
+          : null,
+      };
+      const id = await this.pasarguardId(a);
+      return this.call("/api/user/by-id/" + encodeURIComponent(id), "PUT", body);
+    }
     if (isMarzLike(this.type)) {
       const body = { data_limit: desired.dataLimit };
       if (this.type === "marzneshin") {
@@ -1252,6 +1387,11 @@ class Connector {
     }
     const result = await this.get(a);
     assert(result, "provider_created_user_not_found", 502);
+    if (this.type === "pasarguard" && result.remoteId != null) {
+      // Persist the PasarGuard v5 numeric ID into the service's remoteAccount.
+      // Engine stores this account object when finalizing the operation.
+      a.remoteId = String(result.remoteId);
+    }
     if (result.subscriptionUrl) {
       const url = new URL(result.subscriptionUrl, this.panel.url + "/");
       assert(url.protocol === "https:", "insecure_subscription_url");
@@ -1284,6 +1424,12 @@ class Connector {
         "POST",
         {},
       );
+    if (this.type === "pasarguard") {
+      const id = await this.pasarguardId(a);
+      return this.call("/api/user/by-id/" + encodeURIComponent(id), "PUT", {
+        status: enabled ? "active" : "disabled",
+      });
+    }
     if (isMarzLike(this.type))
       return this.call("/api/user/" + encodeURIComponent(a.username), "PUT", {
         status: enabled ? "active" : "disabled",
@@ -1341,10 +1487,13 @@ class Connector {
       return this.call("/api/subscriptions", "DELETE", {
         usernames: [a.username],
       });
+    if (this.type === "pasarguard") {
+      const id = await this.pasarguardId(a);
+      return this.call("/api/user/by-id/" + encodeURIComponent(id), "DELETE");
+    }
     if (isMarzLike(this.type))
       return this.call(
-        (this.type === "marzneshin" ? "/api/users/" : "/api/user/") +
-          encodeURIComponent(a.username),
+        "/api/user/" + encodeURIComponent(a.username),
         "DELETE",
       );
     const remote = await this.get(a);

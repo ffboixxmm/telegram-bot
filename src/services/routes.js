@@ -255,7 +255,24 @@ admin.post("/panels/:id/test", async (c) => {
     await put(c.env, "panel", p.id, p);
     return result(c, { health: p.health });
   } catch (e) {
-    p.health = { ok: false, error: e.message, at: Date.now() };
+    const code = String(e?.message || "provider_network_error");
+    const url = (() => { try { const u = new URL(p.url); return { host: u.hostname, port: u.port || (u.protocol === "https:" ? "443" : "80"), protocol: u.protocol }; } catch { return null; } })();
+    const hints = {
+      provider_dns_error: "DNS دامنه حل نشد؛ رکورد A/AAAA و نام دامنه را بررسی کن.",
+      provider_connection_refused: "اتصال رد شد؛ سرویس روی این پورت گوش نمی‌دهد یا فایروال آن را بسته است.",
+      provider_timeout: "پاسخی در زمان مجاز نرسید؛ فایروال، مسیر شبکه و باز بودن پورت را بررسی کن.",
+      provider_tls_error: "گواهی HTTPS معتبر نیست یا TLS با دامنه/Worker سازگار نیست.",
+      provider_url_error: "آدرس پنل نامعتبر است؛ نمونه: https://example.com:8000",
+      provider_auth_failed: "سرور پاسخ داد اما احراز هویت رد شد؛ API Key، Username و Password را بررسی کن.",
+      provider_http_404: "سرور در دسترس است اما مسیر API پیدا نشد؛ نسخه PasarGuard و مسیر /api/admin را بررسی کن.",
+      provider_http_429: "سرور درخواست‌های زیاد را محدود کرده؛ کمی بعد دوباره تست کن.",
+      provider_credentials_invalid: "هم API Key و هم Username/Password رد شدند؛ هر سه مقدار را در PasarGuard بررسی کن.",
+      provider_api_key_invalid: "API Key نامعتبر است، اما Username/Password معتبرند؛ API Key را اصلاح کن.",
+      provider_http_500: "خود PasarGuard خطای داخلی 500 داده؛ لاگ پنل را بررسی کن.",
+      provider_http_502: "Gateway/Reverse Proxy پاسخ نامعتبر داده؛ پورت و Proxy جلوی PasarGuard را بررسی کن.",
+      provider_http_503: "PasarGuard یا Reverse Proxy موقتاً در دسترس نیست.",
+    };
+    p.health = { ok: false, error: code, remoteStatus: e?.remoteStatus || 0, hint: hints[code] || "ارتباط برقرار نشد. از روی Worker نمی‌توان علت شبکه را دقیق‌تر تعیین کرد؛ DNS، پورت، TLS و لاگ سرور را بررسی کن.", endpoint: url, at: Date.now() };
     await put(c.env, "panel", p.id, p);
     return result(c, { health: p.health });
   }

@@ -235,8 +235,16 @@ export async function fetchLimited(url, options = {}, max = 2 * 1024 * 1024, tim
       redirect: options.redirect || "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new RemoteError("provider_network_error", {
+  } catch (error) {
+    // Keep provider diagnostics actionable without exposing credentials or raw URLs.
+    const detail = String(error?.cause?.code || error?.code || error?.message || "").toLowerCase();
+    let code = "provider_network_error";
+    if (/enotfound|eai_again|name_not_resolved|dns/.test(detail)) code = "provider_dns_error";
+    else if (/econnrefused|connection refused|econnreset|socket hang up/.test(detail)) code = "provider_connection_refused";
+    else if (/etimedout|timeout|timed out|aborterror/.test(detail)) code = "provider_timeout";
+    else if (/certificate|cert_|tls|ssl|self.signed|unable to verify/.test(detail)) code = "provider_tls_error";
+    else if (/invalid url|unsupported url|scheme/.test(detail)) code = "provider_url_error";
+    throw new RemoteError(code, {
       uncertain: options.method !== "GET",
     });
   }

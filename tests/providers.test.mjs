@@ -141,26 +141,51 @@ test("pasarguard creates users with proxy_settings, group_ids and ISO expire", a
   assert(create.data.proxy_settings);
   assert.deepEqual(create.data.group_ids, [3]);
   assert.equal(typeof create.data.expire, "string");
-  assert.equal(create.headers.authorization, "Bearer api-key");
+  assert.equal(create.headers["X-Api-Key"], "api-key");
+  assert.equal(create.headers.authorization, undefined);
   handler = (req) =>
     req.path === "/api/user/" + a.username
-      ? {
-          username: a.username,
-          status: "active",
-          used_traffic: 0,
-          data_limit: a.dataLimit,
-          expire: new Date(a.expiresAt * 1000).toISOString(),
-          subscription_url: "https://provider.example.org/sub/abc",
-          links: ["vless://x@y:443"],
-        }
+      ? { id: 42, username: a.username, status: "active", used_traffic: 0, data_limit: a.dataLimit, expire: new Date(a.expiresAt * 1000).toISOString(), subscription_url: "https://provider.example.org/sub/abc", links: ["vless://x@y:443"] }
       : undefined;
   const remote = await c.get(a);
   assert.equal(remote.username, a.username);
   assert.equal(remote.status, "active");
+  assert.equal(a.remoteId, undefined);
+  a.remoteId = "42";
   handler = (req) =>
-    req.method === "DELETE" ? new Response(null, { status: 204 }) : undefined;
+    req.path === "/api/user/by-id/42" ? { id: 42, username: a.username, status: "active", data_limit: a.dataLimit, expire: new Date(a.expiresAt * 1000).toISOString(), subscription_url: "https://provider.example.org/sub/abc", links: ["vless://x@y:443"] } : undefined;
+  await c.get(a);
+  assert.equal(calls.at(-1).path, "/api/user/by-id/42");
+  handler = (req) => req.method === "DELETE" ? new Response(null, { status: 204 }) : undefined;
   await c.remove(a);
-  assert.equal(calls.at(-1).path, "/api/user/" + a.username);
+  assert.equal(calls.at(-1).path, "/api/user/by-id/42");
+});
+
+test("pasarguard uses ID-based update and toggle endpoints after creation", async () => {
+  const { c, a } = await api("pasarguard");
+  a.remoteId = "42";
+  handler = (req) => ({ ok: true, id: 42, username: a.username, data_limit: a.dataLimit, expire: new Date(a.expiresAt * 1000).toISOString() });
+  await c.update(a, { dataLimit: 3 * 1073741824, expiresAt: a.expiresAt + 86400 });
+  assert.equal(calls.at(-1).path, "/api/user/by-id/42");
+  assert.equal(calls.at(-1).method, "PUT");
+  await c.toggle(a, false);
+  assert.equal(calls.at(-1).path, "/api/user/by-id/42");
+  assert.equal(calls.at(-1).data.status, "disabled");
+});
+
+test("pasarguard preserves an explicit HTTPS custom port in the panel URL", async () => {
+  const { p, c } = await api("pasarguard");
+  assert.equal(p.url, "https://provider.example.org");
+  const saved = await savePanel(env, {
+    title: "PasarGuard custom port",
+    type: "pasarguard",
+    url: "https://provider.example.org:8000/",
+    secret: { username: "admin", password: "secret", token: "api-key" },
+  }, p);
+  assert.equal(saved.url, "https://provider.example.org:8000");
+  const cc = await connector(env, saved);
+  await cc.resources();
+  assert.equal(calls.at(-1).url, "https://provider.example.org:8000/api/groups");
 });
 test("pasarguard rejects usernames outside its 3-32 lowercase rule", async () => {
   const { p } = await api("pasarguard");
