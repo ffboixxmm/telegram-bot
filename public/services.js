@@ -70,7 +70,29 @@ function svApplyPf(scope, type) {
 function svPfSync() {
   const box = document.getElementById("modal-box");
   const type = vVal("sv-provider") || vVal("sg-type");
-  if (box && type) svApplyPf(box, type);
+  if (box && type) {
+    svApplyPf(box, type);
+    const isPasar = type === "pasarguard";
+    box.querySelectorAll("[data-pg-hide]").forEach((el) => el.classList.toggle("hidden", isPasar));
+    // PasarGuard connection URL is required and may include a custom port, e.g.
+    // https://example.com:8000. It is an admin-only connection field, never a
+    // customer-facing service value.
+    const urlBlock = box.querySelector('[data-pf="pf-url"]');
+    if (urlBlock && isPasar) {
+      const label = urlBlock.querySelector('label');
+      const input = urlBlock.querySelector('#sv-url');
+      if (label) label.textContent = L("آدرس پنل PasarGuard (با پورت)", "PasarGuard panel URL (with port)");
+      if (input) {
+        input.placeholder = "https://example.com:8000";
+        input.autocomplete = "url";
+      }
+    }
+    box.querySelectorAll('[data-pf="pf-cf"],[data-pf="pf-ids"],[data-pf="pf-inbound"],[data-pf="pf-squads"],[data-pf="pf-rebecca"],[data-pf="pf-interface"],[data-pf="pf-subbase"],[data-pf="pf-shelf"],[data-pf="pf-profile"]').forEach((el) => {
+      if (isPasar) el.classList.add("hidden");
+    });
+    const advanced = box.querySelector("details.v-media-details");
+    if (advanced) advanced.closest('[data-pf="pf-api"]')?.classList.toggle("hidden", isPasar);
+  }
   const hint = document.getElementById("sv-provider-hint");
   if (hint) {
     const meta = type && SV.meta?.providers?.[type];
@@ -476,12 +498,12 @@ ACTIONS.svPanelEdit = async (d) => {
   const shelves = (await svAPI("/shelves")).rows;
   vModal(
     L("اتصال پنل سرویس", "Service provider"),
-    `<div class="grid sm:grid-cols-2 gap-4">${vField("sv-title", L("نام موقعیت", "Location title"), p.title, 'required maxlength="100"')}${vSelect(
+    `<div class="grid sm:grid-cols-2 gap-4"><div data-pg-only="title">${vField("sv-title", L("نام سرویس", "Service name"), p.title, 'required maxlength="100"')}</div>${vSelect(
       "sv-provider",
       L("نوع پنل / API", "Provider / API"),
       Object.entries(SV.meta.providers).map(([k, v]) => [k, v.label]),
       p.type,
-    )}<div class="sm:col-span-2 -mt-1"><p id="sv-provider-hint" class="v-meta"></p></div>${vField("sv-location", L("موقعیت", "Location"), p.location)}${vField("sv-country", L("کد کشور (NL, DE, …)", "Country code (NL, DE, …)"), p.country, 'dir="ltr" maxlength="2"')}<div data-pf="pf-url">${vField("sv-url", L("نشانی HTTPS پنل (شامل مسیر مخفی در صورت نیاز)", "HTTPS URL (include the panel path)"), p.url, 'dir="ltr" placeholder="https://vpn.example.com/panel-path"')}</div>${vField("sv-capacity", L("سقف تعداد سرویس", "Service capacity"), p.capacity, 'type="number" min="1" max="100000" required')}</div><div data-pf="pf-api"><div class="v-divider"></div>${vNote(L("فیلدهای خالی ورود، رمز قبلی را حفظ می‌کنند. برای انبار دستی اطلاعات ورود لازم نیست. URL باید HTTPS با گواهی معتبر باشد؛ غیرفعال‌کردن اعتبارسنجی TLS پشتیبانی نمی‌شود.", "Leave credential fields blank to keep them. Manual stock requires no login. HTTPS with a valid certificate is mandatory."), !SV.meta.ready.vault)}<div class="grid sm:grid-cols-2 gap-4"><div data-pf="pf-login">${vField("sv-login", L("نام کاربری پنل", "Provider username"), "", 'autocomplete="off" dir="ltr"')}</div><div data-pf="pf-login">${vField("sv-password", L("رمز پنل", "Provider password"), "", 'type="password" autocomplete="new-password" dir="ltr"')}</div><div data-pf="pf-token">${vField("sv-api-token", L("توکن / API Key", "Token / API key"), "", 'type="password" autocomplete="new-password" dir="ltr"')}</div><div data-pf="pf-cf">${vField("sv-cf-id", "CF Access Client ID", "", 'dir="ltr"')}</div><div data-pf="pf-cf">${vField("sv-cf-secret", "CF Access Client Secret", "", 'type="password" dir="ltr"')}</div></div><div class="grid sm:grid-cols-2 gap-4"><div data-pf="pf-inbound">${vField("sv-inbound", L("شناسه inbound (x-ui)", "Inbound ID (x-ui)"), p.options.inboundId || 1, 'type="number" min="1"')}</div><div data-pf="pf-ids">${vField("sv-serviceids", L("Service / Group IDs (با کاما)", "Service / Group IDs (comma-separated)"), (p.options.serviceIds || []).join(","), 'dir="ltr"')}</div><div data-pf="pf-squads">${vField("sv-squads", L("Squad UUIDها (با کاما)", "Squad UUIDs (comma-separated)"), (p.options.squadIds || []).join(","), 'dir="ltr"')}${vField("sv-hwid", L("سقف دستگاه HWID؛ صفر نامحدود", "HWID device limit; 0 unlimited"), p.options.hwidDeviceLimit || 0, 'type="number" min="0" max="1000"')}</div><div data-pf="pf-rebecca">${vField("sv-rebecca-service", "Rebecca Service ID", p.options.serviceId || "", 'type="number" min="1"')}${vField("sv-ip-limit", L("سقف IP؛ صفر نامحدود", "IP limit; 0 unlimited"), p.options.ipLimit || 0, 'type="number" min="0" max="1000"')}</div><div data-pf="pf-interface">${vField("sv-interface", L("Interface وایرگارد", "WireGuard interface"), p.options.interface || "wg0", 'dir="ltr"')}</div><div data-pf="pf-subbase">${vField("sv-subbase", L("پایه لینک اشتراک؛ در صورت نیاز", "Subscription base URL, if required"), p.options.subscriptionBase, 'dir="ltr"')}</div></div></div><div data-pf="pf-shelf"><div class="grid sm:grid-cols-2 gap-4">${vSelect("sv-shelf", L("قفسه پیش‌فرض انبار", "Default stock shelf"), [["", L("انتخاب قفسه", "Select shelf")], ...shelves.map((s) => [s.id, s.title])], p.options.shelfId || "")}</div></div><div data-pf="pf-profile"><div class="grid sm:grid-cols-2 gap-4">${vField("sv-profile", L("گروه IBSng / Profile میکروتیک", "IBSng group / MikroTik profile"), p.options.profile, 'dir="ltr"')}</div></div><div data-pf="pf-api"><details class="v-media-details"> <summary>${L("تنظیمات پیشرفته پروتکل‌ها و inboundها", "Advanced protocol & inbound settings")}</summary><div class="pt-4">${vArea("sv-options", "JSON", JSON.stringify(p.options || {}, null, 2), 5, 'dir="ltr"')}</div></details></div>${vCheck("sv-enabled", L("فروش روی این پنل فعال باشد", "Enable sales on this provider"), p.enabled)}${vCheck("sv-emergency", L("هدایت فروش جدید به پنل جایگزین", "Route new purchases to an emergency provider"), p.emergency)}${vSelect("sv-fallback", L("پنل جایگزین", "Fallback provider"), [["", L("بدون جایگزین", "No fallback")], ...(SV.cache.panels || []).filter((x) => x.id !== p.id).map((x) => [x.id, x.title])], p.fallbackPanelId || "")}`,
+    )}<div class="sm:col-span-2 -mt-1"><p id="sv-provider-hint" class="v-meta"></p></div><div data-pg-hide="meta">${vField("sv-location", L("موقعیت", "Location"), p.location)}${vField("sv-country", L("کد کشور (NL, DE, …)", "Country code (NL, DE, …)"), p.country, 'dir="ltr" maxlength="2"')}</div><div data-pf="pf-url">${vField("sv-url", L("نشانی HTTPS پنل (شامل مسیر مخفی در صورت نیاز)", "HTTPS URL (include the panel path)"), p.url, 'dir="ltr" placeholder="https://vpn.example.com:8000"')}</div><div data-pg-hide="meta">${vField("sv-capacity", L("سقف تعداد سرویس", "Service capacity"), p.capacity, 'type="number" min="1" max="100000" required')}</div></div><div data-pf="pf-api"><div class="v-divider"></div>${vNote(L("فیلدهای خالی ورود، رمز قبلی را حفظ می‌کنند. برای انبار دستی اطلاعات ورود لازم نیست. URL باید HTTPS با گواهی معتبر باشد؛ غیرفعال‌کردن اعتبارسنجی TLS پشتیبانی نمی‌شود.", "Leave credential fields blank to keep them. Manual stock requires no login. HTTPS with a valid certificate is mandatory."), !SV.meta.ready.vault)}<div class="grid sm:grid-cols-2 gap-4"><div data-pf="pf-login">${vField("sv-login", L("نام کاربری پنل", "Provider username"), "", 'autocomplete="off" dir="ltr"')}</div><div data-pf="pf-login">${vField("sv-password", L("رمز پنل", "Provider password"), "", 'type="password" autocomplete="new-password" dir="ltr"')}</div><div data-pf="pf-token">${vField("sv-api-token", L("توکن / API Key", "Token / API key"), "", 'type="password" autocomplete="new-password" dir="ltr"')}</div><div data-pf="pf-cf">${vField("sv-cf-id", "CF Access Client ID", "", 'dir="ltr"')}</div><div data-pf="pf-cf">${vField("sv-cf-secret", "CF Access Client Secret", "", 'type="password" dir="ltr"')}</div></div><div class="grid sm:grid-cols-2 gap-4"><div data-pf="pf-inbound">${vField("sv-inbound", L("شناسه inbound (x-ui)", "Inbound ID (x-ui)"), p.options.inboundId || 1, 'type="number" min="1"')}</div><div data-pf="pf-ids">${vField("sv-serviceids", L("Service / Group IDs (با کاما)", "Service / Group IDs (comma-separated)"), (p.options.serviceIds || []).join(","), 'dir="ltr"')}</div><div data-pf="pf-squads">${vField("sv-squads", L("Squad UUIDها (با کاما)", "Squad UUIDs (comma-separated)"), (p.options.squadIds || []).join(","), 'dir="ltr"')}${vField("sv-hwid", L("سقف دستگاه HWID؛ صفر نامحدود", "HWID device limit; 0 unlimited"), p.options.hwidDeviceLimit || 0, 'type="number" min="0" max="1000"')}</div><div data-pf="pf-rebecca">${vField("sv-rebecca-service", "Rebecca Service ID", p.options.serviceId || "", 'type="number" min="1"')}${vField("sv-ip-limit", L("سقف IP؛ صفر نامحدود", "IP limit; 0 unlimited"), p.options.ipLimit || 0, 'type="number" min="0" max="1000"')}</div><div data-pf="pf-interface">${vField("sv-interface", L("Interface وایرگارد", "WireGuard interface"), p.options.interface || "wg0", 'dir="ltr"')}</div><div data-pf="pf-subbase">${vField("sv-subbase", L("پایه لینک اشتراک؛ در صورت نیاز", "Subscription base URL, if required"), p.options.subscriptionBase, 'dir="ltr"')}</div></div></div><div data-pf="pf-shelf"><div class="grid sm:grid-cols-2 gap-4">${vSelect("sv-shelf", L("قفسه پیش‌فرض انبار", "Default stock shelf"), [["", L("انتخاب قفسه", "Select shelf")], ...shelves.map((s) => [s.id, s.title])], p.options.shelfId || "")}</div></div><div data-pf="pf-profile"><div class="grid sm:grid-cols-2 gap-4">${vField("sv-profile", L("گروه IBSng / Profile میکروتیک", "IBSng group / MikroTik profile"), p.options.profile, 'dir="ltr"')}</div></div><div data-pf="pf-api"><details class="v-media-details"> <summary>${L("تنظیمات پیشرفته پروتکل‌ها و inboundها", "Advanced protocol & inbound settings")}</summary><div class="pt-4">${vArea("sv-options", "JSON", JSON.stringify(p.options || {}, null, 2), 5, 'dir="ltr"')}</div></details></div><div data-pg-hide="meta">${vCheck("sv-enabled", L("فروش روی این پنل فعال باشد", "Enable sales on this provider"), p.enabled)}${vCheck("sv-emergency", L("هدایت فروش جدید به پنل جایگزین", "Route new purchases to an emergency provider"), p.emergency)}${vSelect("sv-fallback", L("پنل جایگزین", "Fallback provider"), [["", L("بدون جایگزین", "No fallback")], ...(SV.cache.panels || []).filter((x) => x.id !== p.id).map((x) => [x.id, x.title])], p.fallbackPanelId || "")}</div>`,
     "svSavePanel",
   );
   svPfSync();
@@ -515,7 +537,7 @@ ACTIONS.svSavePanel = async () => {
   const data = {
     title: vVal("sv-title"),
     type: vVal("sv-provider"),
-    url: vVal("sv-url"),
+    url: vVal("sv-url") || (SV.edit?.row?.url || ""),
     location: vVal("sv-location"),
     country: vVal("sv-country"),
     capacity: vNum("sv-capacity"),
@@ -543,11 +565,17 @@ ACTIONS.svTestPanel = async (d, el) => {
   el.disabled = true;
   try {
     const r = await svAPI("/panels/" + d.id + "/test", { method: "POST" });
+    const endpoint = r.health.endpoint
+      ? ` [${r.health.endpoint.protocol}//${r.health.endpoint.host}:${r.health.endpoint.port}]`
+      : "";
+    const warning = r.health.warning === "provider_api_key_invalid"
+      ? L("اتصال برقرار شد، اما API Key نامعتبر است؛ Username/Password معتبر هستند. API Key را اصلاح کن.", "Connected, but the API Key is invalid; Username/Password are valid. Fix the API Key.")
+      : "";
     toast(
       r.health.ok
-        ? L("اتصال موفق", "Connection successful")
-        : vError(r.health.error),
-      r.health.ok ? "success" : "error",
+        ? `${L("اتصال موفق", "Connection successful")}${warning ? " — " + warning : ""}${endpoint}`
+        : `${vError(r.health.error)}${r.health.remoteStatus ? " (HTTP " + r.health.remoteStatus + ")" : ""}${r.health.hint ? " — " + r.health.hint : ""}${endpoint}`,
+      r.health.ok ? (warning ? "warning" : "success") : "error",
     );
     await svRefresh();
   } finally {
