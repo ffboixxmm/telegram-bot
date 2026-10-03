@@ -180,6 +180,27 @@ export async function savePanel(env, body, existing = {}) {
   };
   assert(p.title, "panel_title_required");
   assert(p.type === "stock" || publicHTTPS(p.url), "panel_https_required");
+
+  // Apply submitted credentials BEFORE validating provider credentials.
+  // Previously validation ran first, so a brand-new PasarGuard panel with
+  // perfectly valid username/password/API key was rejected with
+  // pasarguard_username_required because p.credentials did not exist yet.
+  if (body.secret && Object.values(body.secret).some((v) => String(v).trim())) {
+    const old = existing.credentials
+      ? await unseal(env, existing.credentials)
+      : {};
+    for (const k of [
+      "username",
+      "password",
+      "token",
+      "accessClientId",
+      "accessClientSecret",
+    ])
+      if (body.secret[k]) old[k] = str(body.secret[k], 2000);
+    p.credentials = await seal(env, old);
+    await env.BOT_KV.delete(key("login", p.id));
+  }
+
   if (p.type === "pasarguard") {
     assert(p.url, "pasarguard_url_required");
     const pgSecret = await unseal(env, p.credentials);
@@ -198,21 +219,6 @@ export async function savePanel(env, body, existing = {}) {
     const row = await get(env, "panel", next);
     assert(row, "fallback_panel_not_found");
     next = row.fallbackPanelId;
-  }
-  if (body.secret && Object.values(body.secret).some((v) => String(v).trim())) {
-    const old = existing.credentials
-      ? await unseal(env, existing.credentials)
-      : {};
-    for (const k of [
-      "username",
-      "password",
-      "token",
-      "accessClientId",
-      "accessClientSecret",
-    ])
-      if (body.secret[k]) old[k] = str(body.secret[k], 2000);
-    p.credentials = await seal(env, old);
-    await env.BOT_KV.delete(key("login", p.id));
   }
   assert(p.type === "stock" || p.credentials, "panel_credentials_required");
   if (isModernProvider(p.type)) {
